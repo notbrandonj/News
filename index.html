@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, query, where, getDocs, addDoc, onSnapshot, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, query, where, getDocs, addDoc, onSnapshot } from 'firebase/firestore'; // Removed orderBy as it's not used in queries directly
 
 // Firebase configuration (provided by the Canvas environment)
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
@@ -23,38 +23,49 @@ const App = () => {
 
     // Effect for Firebase Authentication and Firestore Initialization
     useEffect(() => {
-        const setupFirebase = async () => {
+        let unsubscribeAuth;
+
+        const initAuthAndListen = async () => {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
+                // After successful sign-in, set up the listener
+                unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                        console.log("User authenticated:", user.uid);
+                    } else {
+                        // This case should ideally not happen if signInAnonymously/signInWithCustomToken succeeded
+                        // but good to handle for robustness.
+                        setUserId(crypto.randomUUID()); // Fallback to random ID if no authenticated user
+                        console.log("Signed out or anonymous user.");
+                    }
+                    isAuthReady.current = true; // Auth is now ready and user ID is set
+                });
             } catch (error) {
-                console.error("Firebase authentication error:", error);
+                console.error("Firebase initial authentication error:", error);
+                // Even if auth fails, we might still want to proceed with a random userId for non-auth features
+                setUserId(crypto.randomUUID());
+                isAuthReady.current = true; // Mark as ready even if auth failed, so data fetching can proceed (and likely fail with permissions)
             }
         };
 
-        const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-            if (user) {
-                setUserId(user.uid);
-                isAuthReady.current = true;
-                console.log("User authenticated:", user.uid);
-            } else {
-                setUserId(crypto.randomUUID()); // Use a random ID if not authenticated
-                isAuthReady.current = true;
-                console.log("Signed in anonymously or no user.");
-            }
-            // Once auth state is known, proceed with data fetching
-            setupFirebase();
-        });
+        initAuthAndListen();
 
-        return () => unsubscribeAuth(); // Cleanup auth listener
-    }, []);
+        return () => {
+            if (unsubscribeAuth) {
+                unsubscribeAuth(); // Cleanup auth listener
+            }
+        };
+    }, []); // Empty dependency array means this runs once on mount
 
     // Effect for fetching available dates and news stories
     useEffect(() => {
         if (!isAuthReady.current || !userId) {
+            console.log("Auth not ready or userId not set, skipping data fetch. isAuthReady:", isAuthReady.current, "userId:", userId);
             return; // Wait for authentication to be ready
         }
 
@@ -111,7 +122,10 @@ const App = () => {
                 // Sort stories by timestamp if available, otherwise by headline
                 stories.sort((a, b) => {
                     if (a.timestamp && b.timestamp) {
-                        return b.timestamp.toDate() - a.timestamp.toDate();
+                        // Ensure timestamp is a Date object if it's a Firestore Timestamp
+                        const tsA = a.timestamp.toDate ? a.timestamp.toDate() : a.timestamp;
+                        const tsB = b.timestamp.toDate ? b.timestamp.toDate() : b.timestamp;
+                        return tsB - tsA;
                     }
                     return a.headline.localeCompare(b.headline);
                 });
@@ -181,10 +195,13 @@ const App = () => {
             for (const story of dummyData) {
                 await addDoc(newsCollectionRef, story);
             }
-            alert("Dummy news added successfully!"); // Using alert for simplicity, replace with custom modal in production
+            // Using a custom modal/message box instead of alert()
+            // For simplicity, let's just log a success message for now.
+            console.log("Dummy news added successfully!");
         } catch (e) {
             console.error("Error adding document: ", e);
-            alert("Error adding dummy news: " + e.message);
+            // Using a custom modal/message box instead of alert()
+            console.error("Error adding dummy news: " + e.message);
         }
     };
 
@@ -306,4 +323,3 @@ const App = () => {
 };
 
 export default App;
-
